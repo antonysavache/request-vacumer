@@ -40,6 +40,10 @@ export class AppService {
       let allMessages: any[] = [];
       let offsetId = 0;
       let shouldContinue = true;
+      
+      // Собираем всех пользователей и чаты
+      const users = new Map();
+      const chats = new Map();
 
       while (shouldContinue) {
         const result = await client.invoke(
@@ -52,6 +56,19 @@ export class AppService {
 
         if (!('messages' in result) || result.messages.length === 0) {
           break;
+        }
+
+        // Собираем информацию о пользователях и чатах из каждого запроса
+        if ('users' in result) {
+          for (const user of result.users) {
+            users.set((user as any).id, user);
+          }
+        }
+        
+        if ('chats' in result) {
+          for (const chat of result.chats) {
+            chats.set((chat as any).id, chat);
+          }
         }
 
         for (const msg of result.messages) {
@@ -70,12 +87,53 @@ export class AppService {
         }
       }
 
-      const formattedMessages = allMessages.map((msg: any) => ({
-        message_id: msg.id,
-        text: msg.message || '[медиа файл]',
-        date: new Date(msg.date * 1000).toISOString(),
-        timestamp: msg.date
-      }));
+      const formattedMessages = allMessages.map((msg: any) => {
+        let fromUser: any = null;
+        let chatInfo: any = null;
+
+        // Получаем информацию об отправителе
+        if (msg.fromId) {
+          const userId = msg.fromId.userId || msg.fromId.channelId;
+          if (userId) {
+            const user = users.get(userId);
+            if (user) {
+              fromUser = {
+                id: user.id,
+                username: user.username || null,
+                first_name: user.firstName || null,
+                last_name: user.lastName || null,
+                is_bot: user.bot || false
+              };
+            }
+          }
+        }
+
+        // Получаем информацию о чате
+        if (msg.peerId) {
+          const chatId = msg.peerId.chatId || msg.peerId.channelId;
+          if (chatId) {
+            const chat = chats.get(chatId);
+            if (chat) {
+              chatInfo = {
+                id: chat.id,
+                title: chat.title || null,
+                username: chat.username || null,
+                type: chat.className || 'unknown'
+              };
+            }
+          }
+        }
+
+        return {
+          message_id: msg.id,
+          text: msg.message || '[медиа файл]',
+          date: new Date(msg.date * 1000).toISOString(),
+          timestamp: msg.date,
+          from_user: fromUser,
+          chat: chatInfo,
+          message_type: msg.className || 'message'
+        };
+      });
 
       return {
         success: true,

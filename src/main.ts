@@ -16,6 +16,18 @@ async function bootstrap() {
       logger: ['log', 'error', 'warn', 'debug'],
     });
     
+    // Включаем CORS для фронтенда
+    app.enableCors({
+      origin: [
+        'http://localhost:4200',
+        'http://localhost:3000', 
+        'https://your-frontend-domain.com'
+      ],
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
+    });
+    
     const port = process.env.PORT ?? 3005; // Поменял порт на 3005
     await app.listen(port);
     
