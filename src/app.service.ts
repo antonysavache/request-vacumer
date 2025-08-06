@@ -1,120 +1,99 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { TelegramClientService } from './telegram/telegram-client.service';
-import { getMonitoringConfig } from './monitoring/monitoring.config';
+import { Api } from 'telegram';
 
 @Injectable()
-export class AppService implements OnModuleInit {
+export class AppService {
   private readonly logger = new Logger(AppService.name);
 
-  constructor(
-    private readonly telegramClientService: TelegramClientService,
-  ) {}
-
-  async onModuleInit() {
-    try {
-      // Проверяем все необходимые переменные окружения
-      const requiredEnvVars = [
-        'TELEGRAM_API_ID',
-        'TELEGRAM_API_HASH',
-        'TARGET_CHATS',
-        'KEYWORDS',
-        'TARGET_CHAT_ID'
-      ];
-
-      const missingVars = requiredEnvVars.filter(varName => {
-        const value = process.env[varName];
-        return !value || value.trim().length === 0 || 
-               value === 'your_api_id' || value === 'your_api_hash' ||
-               value === 'your_phone_number';
-      });
-
-      if (missingVars.length > 0) {
-        this.logger.error('❌ Missing required environment variables:');
-        missingVars.forEach(varName => {
-          this.logger.error(`   - ${varName}`);
-        });
-        this.logger.log('💡 Please fill all required variables in .env file');
-        return;
-      }
-
-      // Проверяем и выводим конфигурацию мониторинга
-      try {
-        const config = getMonitoringConfig();
-        this.logger.log('✅ TARGETED monitoring configuration validated:');
-        this.logger.log(`🎯 Will monitor ONLY these chats: ${config.targetChats.join(', ')}`);
-        this.logger.log(`📝 Looking for keywords: ${config.keywords.join(', ')}`);
-        this.logger.log(`📤 Forwarding to: ${config.targetChatId}`);
-        this.logger.log('📊 Using TARGETED POLLING (every 30 seconds, only env chats)');
-      } catch (configError) {
-        this.logger.error('❌ Invalid monitoring configuration:', configError.message);
-        return;
-      }
-
-      // Проверяем наличие session string
-      const sessionString = process.env.TELEGRAM_SESSION_STRING;
-      if (!sessionString || sessionString.trim().length === 0) {
-        this.logger.warn('⚠️ TELEGRAM_SESSION_STRING not found in .env file');
-        this.logger.log('📋 First run: will require phone authentication');
-        this.logger.log('💡 Copy session string from logs to .env for server deployment');
-        this.logger.log('');
-      }
-
-      // Отправляем тестовое сообщение для проверки
-      await this.sendTestMessage();
-      
-    } catch (error) {
-      this.logger.error('Application error:', error.message);
-    }
-  }
-
-  private async sendTestMessage() {
-    this.logger.log('📤 Starting test message sending...');
-    
-    try {
-      // Ждем пока клиент будет готов
-      if (!this.telegramClientService.isReady()) {
-        this.logger.log('⏳ Waiting for Telegram client to be ready...');
-        let attempts = 0;
-        while (!this.telegramClientService.isReady() && attempts < 30) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          attempts++;
-        }
-        
-        if (!this.telegramClientService.isReady()) {
-          this.logger.error('❌ Telegram client failed to initialize within 30 seconds');
-          return;
-        }
-      }
-      
-      const client = this.telegramClientService.getClient();
-      const config = getMonitoringConfig();
-      const testMessage = `🚀 Request Vacuumer Started!
-
-⏰ Started at: ${new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })}
-🎯 Monitoring ${config.targetChats.length} SPECIFIC chats
-📋 Target chats: ${config.targetChats.join(', ')}
-📝 Keywords: ${config.keywords.join(', ')}
-📊 Method: Targeted Polling (30s, env chats only)
-✅ System is ready and monitoring!`;
-      
-      this.logger.log(`📝 Sending startup notification to: ${config.targetChatId}`);
-      
-      try {
-        const entity = await client.getEntity(config.targetChatId);
-        await client.sendMessage(entity, { message: testMessage });
-        
-        this.logger.log('✅ Startup notification sent successfully!');
-        this.logger.log('🎉 Request Vacuumer is now polling ONLY target chats...');
-      } catch (sendError) {
-        this.logger.error(`❌ Failed to send startup notification: ${sendError.message}`);
-      }
-      
-    } catch (error) {
-      this.logger.error('❌ Test message failed:', error.message);
-    }
-  }
+  constructor(private readonly telegramClient: TelegramClientService) {}
 
   getHello(): string {
-    return 'Request Vacuumer - Targeted Polling Monitor';
+    return 'Hello World!';
+  }
+
+  async getChatHistory(params: {
+    fromDate?: string;
+    toDate?: string;
+    limit: number | null;
+  }) {
+    try {
+      const client = this.telegramClient.getClient();
+      
+      const targetChatId = process.env.TARGET_CHATS;
+      if (!targetChatId) {
+        throw new Error('TARGET_CHATS environment variable is not set');
+      }
+
+      const timeshiftHours = parseInt(process.env.TIMESHIFT_TO_REQUEST || '24');
+      
+      let fromDate = params.fromDate;
+      if (!fromDate) {
+        const hoursAgo = new Date();
+        hoursAgo.setHours(hoursAgo.getHours() - timeshiftHours);
+        fromDate = hoursAgo.toISOString();
+      }
+
+      const entity = await client.getEntity(targetChatId);
+      const fromTimestamp = new Date(fromDate).getTime() / 1000;
+
+      let allMessages: any[] = [];
+      let offsetId = 0;
+      let shouldContinue = true;
+
+      while (shouldContinue) {
+        const result = await client.invoke(
+          new Api.messages.GetHistory({
+            peer: entity,
+            limit: 100,
+            offsetId: offsetId
+          })
+        );
+
+        if (!('messages' in result) || result.messages.length === 0) {
+          break;
+        }
+
+        for (const msg of result.messages) {
+          // Проверяем что сообщение не пустое и имеет дату
+          if ((msg as any).date && (msg as any).date >= fromTimestamp) {
+            allMessages.push(msg);
+            offsetId = (msg as any).id;
+          } else if ((msg as any).date && (msg as any).date < fromTimestamp) {
+            shouldContinue = false;
+            break;
+          }
+        }
+
+        if (result.messages.length < 100) {
+          break;
+        }
+      }
+
+      const formattedMessages = allMessages.map((msg: any) => ({
+        message_id: msg.id,
+        text: msg.message || '[медиа файл]',
+        date: new Date(msg.date * 1000).toISOString(),
+        timestamp: msg.date
+      }));
+
+      return {
+        success: true,
+        data: {
+          messages: formattedMessages,
+          total_found: formattedMessages.length,
+          chat_id: targetChatId,
+          timeshift_hours: timeshiftHours,
+          calculated_from_date: fromDate
+        }
+      };
+
+    } catch (error) {
+      this.logger.error('Error fetching chat history:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
   }
 }

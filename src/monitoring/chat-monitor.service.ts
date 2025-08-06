@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { TelegramClientService } from '../telegram/telegram-client.service';
 import { MessageFilterService } from './message-filter.service';
+import { DelayedMessageService } from './delayed-message.service';
 import { getMonitoringConfig, MonitoringConfig } from './monitoring.config';
 import { NewMessage } from 'telegram/events';
 
@@ -13,6 +14,7 @@ export class ChatMonitorService implements OnModuleInit {
   constructor(
     private readonly telegramClientService: TelegramClientService,
     private readonly messageFilterService: MessageFilterService,
+    private readonly delayedMessageService: DelayedMessageService,
   ) {}
 
   async onModuleInit() {
@@ -24,6 +26,11 @@ export class ChatMonitorService implements OnModuleInit {
       this.logger.log(`🎯 Target chats: ${this.config.targetChats.join(', ')}`);
       this.logger.log(`📝 Keywords: ${this.config.keywords.join(', ')}`);
       this.logger.log(`📤 Forward to: ${this.config.targetChatId}`);
+      this.logger.log(`⏰ Delayed messages: ${this.config.delayedMessagesEnabled ? 'ENABLED' : 'DISABLED'}`);
+      if (this.config.delayedMessagesEnabled) {
+        this.logger.log(`⏱️ Default delay: ${this.config.defaultDelayMinutes} minutes`);
+        this.logger.log(`📊 Log chat: ${this.config.logChatId || 'Not set'}`);
+      }
 
       // Ждем готовности Telegram клиента и запускаем мониторинг
       await this.waitForClientAndStartMonitoring();
@@ -144,19 +151,22 @@ export class ChatMonitorService implements OnModuleInit {
       
       let userName: string | null = null;
       let username: string | null = null;
+      let userId: string | null = null;
       
       if (message.fromId) {
         try {
           const userEntity = await client.getEntity(message.fromId);
           userName = this.getUserDisplayName(userEntity);
           username = this.getUserUsername(userEntity);
+          userId = message.fromId.userId?.toString() || null;
           
-          this.logger.log(`👤 User: ${userName} (${username || 'no username'})`);
+          this.logger.log(`👤 User: ${userName} (${username || 'no username'}) ID: ${userId}`);
           
         } catch (error) {
           this.logger.warn(`Failed to get user info: ${error.message}`);
           userName = 'Unknown User';
           username = null;
+          userId = null;
         }
       }
 
@@ -174,6 +184,7 @@ export class ChatMonitorService implements OnModuleInit {
           chatId,
           userName,
           username,
+          userId,
           filterResult.matchedKeywords,
           messageDate
         );
@@ -190,6 +201,7 @@ export class ChatMonitorService implements OnModuleInit {
     chatId: string,
     userName: string | null,
     username: string | null,
+    userId: string | null,
     matchedKeywords: string[],
     messageDate: Date
   ): Promise<void> {
@@ -208,14 +220,76 @@ export class ChatMonitorService implements OnModuleInit {
         messageDate
       );
 
+      // Отправляем в основной чат
       const targetEntity = await client.getEntity(this.config.targetChatId);
       await client.sendMessage(targetEntity, { message: forwardedMessage });
       
       this.logger.log(`✅ Message forwarded successfully (user: ${username || userName})`);
+
+      // Если включены отложенные сообщения и мы можем определить пользователя
+      if (this.config.delayedMessagesEnabled && userId && userName) {
+        await this.scheduleDelayedResponse(
+          originalMessage,
+          chatTitle,
+          chatId,
+          userId,
+          userName,
+          username,
+          messageDate,
+          matchedKeywords
+        );
+      }
       
     } catch (error) {
       this.logger.error(`❌ Failed to forward message: ${error.message}`);
     }
+  }
+
+  /**
+   * Планирует отложенное сообщение пользователю
+   */
+  private async scheduleDelayedResponse(
+    originalMessage: string,
+    chatTitle: string,
+    chatId: string,
+    userId: string,
+    userName: string,
+    username: string | null,
+    messageDate: Date,
+    matchedKeywords: string[]
+  ): Promise<void> {
+    try {
+      // Формируем сообщение для пользователя
+      const delayedMessage = this.createDelayedMessage(originalMessage, chatTitle, matchedKeywords);
+
+      const taskId = await this.delayedMessageService.scheduleDelayedMessage(
+        userId, // теперь используем реальный userId
+        chatId,
+        delayedMessage,
+        this.config.defaultDelayMinutes!,
+        {
+          text: originalMessage,
+          chatTitle,
+          userName,
+          username: username || undefined,
+          messageDate
+        },
+        this.config.logChatId
+      );
+
+      this.logger.log(`⏰ Scheduled delayed message for ${userName}: ${taskId}`);
+
+    } catch (error) {
+      this.logger.error(`❌ Failed to schedule delayed message: ${error.message}`);
+    }
+  }
+
+  /**
+   * Создает текст отложенного сообщения из переменной окружения
+   */
+  private createDelayedMessage(originalMessage: string, chatTitle: string, matchedKeywords: string[]): string {
+    // Просто возвращаем сообщение из конфигурации, без всяких плейсхолдеров
+    return this.config.delayedMessage || 'Привет! Пиши в ЛС.';
   }
 
   private getEntityTitle(entity: any): string {

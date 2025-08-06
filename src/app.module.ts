@@ -3,7 +3,6 @@ import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { TelegramModule } from './telegram/telegram.module';
-import { MonitoringModule } from './monitoring/monitoring.module';
 
 @Module({
   imports: [
@@ -12,7 +11,7 @@ import { MonitoringModule } from './monitoring/monitoring.module';
       envFilePath: '.env',
     }),
     TelegramModule,
-    MonitoringModule,
+    // MonitoringModule, // Отключен - работаем только через API
   ],
   controllers: [AppController],
   providers: [AppService],

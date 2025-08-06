@@ -4,6 +4,11 @@ export interface MonitoringConfig {
   targetChatId: string;
   excludeKeywords?: string[];
   minMessageLength?: number;
+  // Настройки отложенных сообщений
+  delayedMessagesEnabled?: boolean;
+  defaultDelayMinutes?: number;
+  logChatId?: string;
+  delayedMessage?: string;
 }
 
 export const getMonitoringConfig = (): MonitoringConfig => {
@@ -12,6 +17,10 @@ export const getMonitoringConfig = (): MonitoringConfig => {
   const targetChatId = process.env.TARGET_CHAT_ID;
   const excludeKeywordsEnv = process.env.EXCLUDE_KEYWORDS;
   const minMessageLengthEnv = process.env.MIN_MESSAGE_LENGTH;
+  const delayedMessagesEnabledEnv = process.env.DELAYED_MESSAGES_ENABLED;
+  const defaultDelayMinutesEnv = process.env.DEFAULT_DELAY_MINUTES;
+  const logChatIdEnv = process.env.LOG_CHAT_ID;
+  const delayedMessageEnv = process.env.DELAYED_MESSAGE;
 
   if (!targetChatsEnv || !keywordsEnv || !targetChatId) {
     throw new Error('Missing required monitoring configuration. Please set TARGET_CHATS, KEYWORDS, and TARGET_CHAT_ID in environment variables.');
@@ -42,11 +51,21 @@ export const getMonitoringConfig = (): MonitoringConfig => {
     ? parseInt(minMessageLengthEnv, 10) 
     : 0;
 
+  // Настройки отложенных сообщений
+  const delayedMessagesEnabled = delayedMessagesEnabledEnv === 'true';
+  const defaultDelayMinutes = defaultDelayMinutesEnv 
+    ? parseInt(defaultDelayMinutesEnv, 10) 
+    : 30; // по умолчанию 30 минут
+
   return {
     targetChats,
     keywords,
     targetChatId: targetChatId.trim(),
     excludeKeywords: excludeKeywords.length > 0 ? excludeKeywords : undefined,
     minMessageLength: minMessageLength > 0 ? minMessageLength : undefined,
+    delayedMessagesEnabled,
+    defaultDelayMinutes,
+    logChatId: logChatIdEnv?.trim(),
+    delayedMessage: delayedMessageEnv,
   };
 };

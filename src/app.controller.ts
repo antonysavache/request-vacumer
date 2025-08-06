@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Query } from '@nestjs/common';
 import { AppService } from './app.service';
 
 @Controller()
@@ -8,5 +8,18 @@ export class AppController {
   @Get()
   getHello(): string {
     return this.appService.getHello();
+  }
+
+  @Get('chat-history')
+  async getChatHistory(
+    @Query('from_date') fromDate?: string,
+    @Query('to_date') toDate?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.appService.getChatHistory({
+      fromDate,
+      toDate,
+      limit: limit ? parseInt(limit) : 100000,
+    });
   }
 }
