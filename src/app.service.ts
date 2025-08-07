@@ -15,7 +15,7 @@ export class AppService {
   async getChatHistory(params: {
     fromDate?: string;
     toDate?: string;
-    limit: number | null;
+    hoursBack?: number;
   }) {
     try {
       const client = this.telegramClient.getClient();
@@ -25,25 +25,90 @@ export class AppService {
         throw new Error('TARGET_CHATS environment variable is not set');
       }
 
-      const timeshiftHours = parseInt(process.env.TIMESHIFT_TO_REQUEST || '24');
+      this.logger.log(`🔍 Attempting to get chat history for: ${targetChatId}`);
+
+      // Определяем количество часов назад
+      let hoursBack = params.hoursBack;
+      if (!hoursBack) {
+        // Если не передан параметр, берем из переменных окружения или дефолт
+        const timeshiftHours = parseInt(process.env.TIMESHIFT_TO_REQUEST || '24');
+        hoursBack = timeshiftHours;
+      }
+
+      this.logger.log(`⏰ Looking back ${hoursBack} hours`);
       
       let fromDate = params.fromDate;
       if (!fromDate) {
         const hoursAgo = new Date();
-        hoursAgo.setHours(hoursAgo.getHours() - timeshiftHours);
+        hoursAgo.setHours(hoursAgo.getHours() - hoursBack);
         fromDate = hoursAgo.toISOString();
       }
 
-      const entity = await client.getEntity(targetChatId);
+      this.logger.log(`📅 From date: ${fromDate}`);
+
+      // Проверяем, что клиент подключен
+      if (!this.telegramClient.isReady()) {
+        throw new Error('Telegram client is not ready');
+      }
+
+      let entity;
+      try {
+        entity = await client.getEntity(targetChatId);
+        this.logger.log(`✅ Successfully connected to chat: ${entity.title || targetChatId}`);
+      } catch (entityError) {
+        this.logger.error(`❌ Failed to get entity for chat ID: ${targetChatId}`);
+        this.logger.error(`Entity error: ${entityError.message}`);
+        
+        // Попробуем другие варианты ID
+        const alternativeIds = [
+          targetChatId,
+          `-100${targetChatId}`,  // Добавляем префикс для супергрупп
+          targetChatId.replace('-100', ''), // Убираем префикс если есть
+        ];
+        
+        this.logger.log(`🔄 Trying alternative IDs: ${alternativeIds.join(', ')}`);
+        
+        let foundEntity = false;
+        for (const altId of alternativeIds) {
+          try {
+            entity = await client.getEntity(altId);
+            this.logger.log(`✅ Found chat with ID: ${altId} - ${entity.title || altId}`);
+            foundEntity = true;
+            break;
+          } catch (e) {
+            this.logger.log(`❌ ID ${altId} failed: ${e.message}`);
+          }
+        }
+        
+        if (!foundEntity) {
+          // Попробуем получить список доступных диалогов для отладки
+          try {
+            this.logger.log(`🔍 Getting available dialogs for debugging...`);
+            const dialogs = await client.getDialogs({ limit: 10 });
+            
+            this.logger.log(`📋 Available dialogs (showing first 10):`);
+            for (const dialog of dialogs) {
+              const entity = dialog.entity as any;
+              const title = entity.title || entity.firstName || 'Unknown';
+              const id = entity.id || 'Unknown ID';
+              this.logger.log(`  - ${title} (ID: ${id})`);
+            }
+          } catch (dialogError) {
+            this.logger.warn(`Failed to get dialogs: ${dialogError.message}`);
+          }
+          
+          throw new Error(`Could not find chat with any of these IDs: ${alternativeIds.join(', ')}. Check if the bot is added to the target chat and the chat ID is correct.`);
+        }
+      }
+
       const fromTimestamp = new Date(fromDate).getTime() / 1000;
 
       let allMessages: any[] = [];
       let offsetId = 0;
       let shouldContinue = true;
       
-      // Собираем всех пользователей и чаты
-      const users = new Map();
-      const chats = new Map();
+      // Собираем всех пользователей из всех запросов
+      const allUsers = new Map();
 
       while (shouldContinue) {
         const result = await client.invoke(
@@ -58,16 +123,10 @@ export class AppService {
           break;
         }
 
-        // Собираем информацию о пользователях и чатах из каждого запроса
+        // Собираем пользователей из текущего результата
         if ('users' in result) {
           for (const user of result.users) {
-            users.set((user as any).id, user);
-          }
-        }
-        
-        if ('chats' in result) {
-          for (const chat of result.chats) {
-            chats.set((chat as any).id, chat);
+            allUsers.set((user as any).id, user);
           }
         }
 
@@ -87,53 +146,42 @@ export class AppService {
         }
       }
 
-      const formattedMessages = allMessages.map((msg: any) => {
-        let fromUser: any = null;
-        let chatInfo: any = null;
+      const formattedMessages: any[] = [];
+      
+      for (const msg of allMessages) {
+        let fromUsername: string | null = null;
+        let fromFirstName: string | null = null;
+        let fromLastName: string | null = null;
 
-        // Получаем информацию об отправителе
+        // БЕРЕМ ЛОГИКУ ПРЯМО ИЗ МОНИТОРИНГА
         if (msg.fromId) {
-          const userId = msg.fromId.userId || msg.fromId.channelId;
-          if (userId) {
-            const user = users.get(userId);
-            if (user) {
-              fromUser = {
-                id: user.id,
-                username: user.username || null,
-                first_name: user.firstName || null,
-                last_name: user.lastName || null,
-                is_bot: user.bot || false
-              };
+          try {
+            const userEntity = await client.getEntity(msg.fromId);
+            const userName = this.getUserDisplayName(userEntity);
+            const username = this.getUserUsername(userEntity);
+            
+            fromUsername = username;
+            // Разбиваем display name на части
+            if (userName && userName !== 'Unknown User') {
+              const nameParts = userName.replace('@', '').split(' ');
+              fromFirstName = nameParts[0] || null;
+              fromLastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : null;
             }
+          } catch (error) {
+            this.logger.warn(`Failed to get user info for message ${msg.id}: ${error.message}`);
           }
         }
 
-        // Получаем информацию о чате
-        if (msg.peerId) {
-          const chatId = msg.peerId.chatId || msg.peerId.channelId;
-          if (chatId) {
-            const chat = chats.get(chatId);
-            if (chat) {
-              chatInfo = {
-                id: chat.id,
-                title: chat.title || null,
-                username: chat.username || null,
-                type: chat.className || 'unknown'
-              };
-            }
-          }
-        }
-
-        return {
+        formattedMessages.push({
           message_id: msg.id,
           text: msg.message || '[медиа файл]',
           date: new Date(msg.date * 1000).toISOString(),
           timestamp: msg.date,
-          from_user: fromUser,
-          chat: chatInfo,
-          message_type: msg.className || 'message'
-        };
-      });
+          from_username: fromUsername,
+          from_first_name: fromFirstName,
+          from_last_name: fromLastName
+        });
+      }
 
       return {
         success: true,
@@ -141,7 +189,7 @@ export class AppService {
           messages: formattedMessages,
           total_found: formattedMessages.length,
           chat_id: targetChatId,
-          timeshift_hours: timeshiftHours,
+          timeshift_hours: hoursBack,
           calculated_from_date: fromDate
         }
       };
@@ -153,5 +201,25 @@ export class AppService {
         error: error.message
       };
     }
+  }
+
+  private getUserDisplayName(entity: any): string {
+    if (entity?.firstName && entity?.lastName) {
+      return `${entity.firstName} ${entity.lastName}`;
+    }
+    if (entity?.firstName) {
+      return entity.firstName;
+    }
+    if (entity?.username) {
+      return `@${entity.username}`;
+    }
+    return 'Unknown User';
+  }
+
+  private getUserUsername(entity: any): string | null {
+    if (entity?.username) {
+      return `@${entity.username}`;
+    }
+    return null;
   }
 }

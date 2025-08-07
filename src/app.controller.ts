@@ -14,12 +14,12 @@ export class AppController {
   async getChatHistory(
     @Query('from_date') fromDate?: string,
     @Query('to_date') toDate?: string,
-    @Query('limit') limit?: string,
+    @Query('hours_back') hoursBack?: string,
   ) {
     return this.appService.getChatHistory({
       fromDate,
       toDate,
-      limit: limit ? parseInt(limit) : 100000,
+      hoursBack: hoursBack ? parseInt(hoursBack) : undefined,
     });
   }
 }
