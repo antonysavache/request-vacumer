@@ -153,22 +153,37 @@ export class AppService {
         let fromFirstName: string | null = null;
         let fromLastName: string | null = null;
 
-        // БЕРЕМ ЛОГИКУ ПРЯМО ИЗ МОНИТОРИНГА
+        // ИСПОЛЬЗУЕМ УЖЕ ПОЛУЧЕННЫХ ПОЛЬЗОВАТЕЛЕЙ ИЗ allUsers
         if (msg.fromId) {
-          try {
-            const userEntity = await client.getEntity(msg.fromId);
-            const userName = this.getUserDisplayName(userEntity);
-            const username = this.getUserUsername(userEntity);
+          const userId = typeof msg.fromId === 'object' && 'userId' in msg.fromId 
+            ? msg.fromId.userId 
+            : msg.fromId;
             
-            fromUsername = username;
-            // Разбиваем display name на части
-            if (userName && userName !== 'Unknown User') {
-              const nameParts = userName.replace('@', '').split(' ');
-              fromFirstName = nameParts[0] || null;
-              fromLastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : null;
+          const user = allUsers.get(userId);
+          
+          if (user) {
+            // Используем данные пользователя из кэша
+            fromUsername = user.username ? `@${user.username}` : null;
+            fromFirstName = user.firstName || null;
+            fromLastName = user.lastName || null;
+          } else {
+            // Фоллбэк: пытаемся получить пользователя через API
+            try {
+              const userEntity = await client.getEntity(msg.fromId);
+              const userName = this.getUserDisplayName(userEntity);
+              const username = this.getUserUsername(userEntity);
+              
+              fromUsername = username;
+              // Разбиваем display name на части
+              if (userName && userName !== 'Unknown User') {
+                const nameParts = userName.replace('@', '').split(' ');
+                fromFirstName = nameParts[0] || null;
+                fromLastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : null;
+              }
+            } catch (error) {
+              this.logger.warn(`Failed to get user info for message ${msg.id}: ${error.message}`);
+              // Оставляем все null, что уже установлено выше
             }
-          } catch (error) {
-            this.logger.warn(`Failed to get user info for message ${msg.id}: ${error.message}`);
           }
         }
 
