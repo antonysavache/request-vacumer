@@ -109,6 +109,21 @@ export class AppService {
       
       // Собираем всех пользователей из всех запросов
       const allUsers = new Map();
+      
+      // Получаем список всех диалогов для проверки переписок
+      this.logger.log(`🔍 Getting dialogs to check private conversations...`);
+      const dialogs = await client.getDialogs({ limit: 100 }); // Увеличиваем лимит для более полной проверки
+      const privateDialogs = new Set();
+      
+      for (const dialog of dialogs) {
+        const entity = dialog.entity as any;
+        // Проверяем, что это приватный чат (не группа/канал)
+        if (entity.className === 'User' && entity.id) {
+          privateDialogs.add(entity.id);
+        }
+      }
+      
+      this.logger.log(`📱 Found ${privateDialogs.size} private conversations`);
 
       while (shouldContinue) {
         const result = await client.invoke(
@@ -152,6 +167,7 @@ export class AppService {
         let fromUsername: string | null = null;
         let fromFirstName: string | null = null;
         let fromLastName: string | null = null;
+        let hasPrivateChat: boolean = false;
 
         // ИСПОЛЬЗУЕМ УЖЕ ПОЛУЧЕННЫХ ПОЛЬЗОВАТЕЛЕЙ ИЗ allUsers
         if (msg.fromId) {
@@ -160,6 +176,9 @@ export class AppService {
             : msg.fromId;
             
           const user = allUsers.get(userId);
+          
+          // Проверяем, есть ли переписка с этим пользователем
+          hasPrivateChat = privateDialogs.has(userId);
           
           if (user) {
             // Используем данные пользователя из кэша
@@ -194,7 +213,8 @@ export class AppService {
           timestamp: msg.date,
           from_username: fromUsername,
           from_first_name: fromFirstName,
-          from_last_name: fromLastName
+          from_last_name: fromLastName,
+          has_private_chat: hasPrivateChat
         });
       }
 
