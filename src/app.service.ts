@@ -120,10 +120,12 @@ export class AppService {
         // Проверяем, что это приватный чат (не группа/канал)
         if (entity.className === 'User' && entity.id) {
           privateDialogs.add(entity.id);
+          this.logger.debug(`📱 Added private dialog with user ID: ${entity.id} (${entity.firstName || 'No name'} ${entity.lastName || ''})`);
         }
       }
       
       this.logger.log(`📱 Found ${privateDialogs.size} private conversations`);
+      this.logger.debug(`📋 Private dialog IDs: [${Array.from(privateDialogs).join(', ')}]`);
 
       while (shouldContinue) {
         const result = await client.invoke(
@@ -171,14 +173,29 @@ export class AppService {
 
         // ИСПОЛЬЗУЕМ УЖЕ ПОЛУЧЕННЫХ ПОЛЬЗОВАТЕЛЕЙ ИЗ allUsers
         if (msg.fromId) {
-          const userId = typeof msg.fromId === 'object' && 'userId' in msg.fromId 
-            ? msg.fromId.userId 
-            : msg.fromId;
+          let userId = msg.fromId;
+          
+          // Обрабатываем разные форматы fromId
+          if (typeof msg.fromId === 'object' && 'userId' in msg.fromId) {
+            userId = msg.fromId.userId;
+          } else if (typeof msg.fromId === 'object' && '_' in msg.fromId) {
+            // Для некоторых версий Telegram API
+            userId = (msg.fromId as any)._;
+          }
+          
+          // Приводим к числу если это строка
+          if (typeof userId === 'string') {
+            userId = parseInt(userId);
+          }
+          
+          this.logger.debug(`👤 Processing message from user ID: ${userId} (original fromId: ${JSON.stringify(msg.fromId)})`);
             
           const user = allUsers.get(userId);
           
           // Проверяем, есть ли переписка с этим пользователем
           hasPrivateChat = privateDialogs.has(userId);
+          
+          this.logger.debug(`💬 User ${userId} has private chat: ${hasPrivateChat}`);
           
           if (user) {
             // Используем данные пользователя из кэша
@@ -188,7 +205,7 @@ export class AppService {
           } else {
             // Фоллбэк: пытаемся получить пользователя через API
             try {
-              const userEntity = await client.getEntity(msg.fromId);
+              const userEntity = await client.getEntity(userId);
               const userName = this.getUserDisplayName(userEntity);
               const username = this.getUserUsername(userEntity);
               
@@ -217,6 +234,11 @@ export class AppService {
           has_private_chat: hasPrivateChat
         });
       }
+
+      // Логирование статистики
+      const withPrivateChat = formattedMessages.filter(m => m.has_private_chat).length;
+      const withoutPrivateChat = formattedMessages.length - withPrivateChat;
+      this.logger.log(`📊 Message statistics: ${withPrivateChat} with private chat, ${withoutPrivateChat} without private chat`);
 
       return {
         success: true,
@@ -306,6 +328,53 @@ export class AppService {
 
     } catch (error) {
       this.logger.error(`Error sending message: ${error.message}`);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  async debugPrivateDialogs() {
+    try {
+      this.logger.log(`🔧 Debug: Getting all private dialogs...`);
+      
+      const client = this.telegramClient.getClient();
+      
+      if (!this.telegramClient.isReady()) {
+        throw new Error('Telegram client is not ready');
+      }
+
+      const dialogs = await client.getDialogs({ limit: 100 });
+      const privateDialogs: any[] = [];
+      
+      for (const dialog of dialogs) {
+        const entity = dialog.entity as any;
+        if (entity.className === 'User') {
+          privateDialogs.push({
+            id: entity.id,
+            username: entity.username || null,
+            first_name: entity.firstName || null,
+            last_name: entity.lastName || null,
+            is_bot: entity.bot || false,
+            is_verified: entity.verified || false,
+            last_message_date: dialog.date ? new Date(dialog.date * 1000).toISOString() : null
+          });
+        }
+      }
+
+      this.logger.log(`🔧 Debug: Found ${privateDialogs.length} private dialogs`);
+
+      return {
+        success: true,
+        data: {
+          private_dialogs: privateDialogs,
+          total_count: privateDialogs.length
+        }
+      };
+
+    } catch (error) {
+      this.logger.error(`Error getting private dialogs: ${error.message}`);
       return {
         success: false,
         error: error.message

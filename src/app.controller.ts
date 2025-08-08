@@ -33,4 +33,9 @@ export class AppController {
   ) {
     return this.appService.sendPrivateMessage(body.userId, body.message, body.parseMode);
   }
+
+  @Get('debug/private-dialogs')
+  async debugPrivateDialogs() {
+    return this.appService.debugPrivateDialogs();
+  }
 }
