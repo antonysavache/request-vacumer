@@ -120,16 +120,19 @@ export class AppService {
         const entity = dialog.entity as any;
         // Проверяем, что это приватный чат (не группа/канал)
         if (entity.className === 'User' && entity.id) {
-          privateDialogs.add(entity.id);
+          // Приводим ID к числу для консистентности
+          const numericId = typeof entity.id === 'object' ? parseInt(entity.id.toString()) : parseInt(entity.id);
+          privateDialogs.add(numericId);
           if (entity.username) {
-            privateDialogsByUsername.set(entity.username.toLowerCase(), entity.id);
+            privateDialogsByUsername.set(entity.username.toLowerCase(), numericId);
           }
-          this.logger.debug(`📱 Added private dialog with user ID: ${entity.id}, username: ${entity.username || 'No username'} (${entity.firstName || 'No name'} ${entity.lastName || ''})`);
+          this.logger.debug(`📱 Added private dialog with user ID: ${numericId} (original: ${entity.id}, type: ${typeof entity.id}), username: ${entity.username || 'No username'} (${entity.firstName || 'No name'} ${entity.lastName || ''})`);
         }
       }
       
       this.logger.log(`📱 Found ${privateDialogs.size} private conversations`);
-      this.logger.debug(`📋 Private dialog IDs: [${Array.from(privateDialogs).join(', ')}]`);
+      this.logger.log(`📋 Private dialog IDs: [${Array.from(privateDialogs).join(', ')}]`);
+      this.logger.log(`📋 Private dialogs by username: ${JSON.stringify(Object.fromEntries(privateDialogsByUsername))}`);
 
       while (shouldContinue) {
         const result = await client.invoke(
@@ -147,7 +150,9 @@ export class AppService {
         // Собираем пользователей из текущего результата
         if ('users' in result) {
           for (const user of result.users) {
-            allUsers.set((user as any).id, user);
+            // Приводим ID к числу для консистентности
+            const numericId = typeof (user as any).id === 'object' ? parseInt((user as any).id.toString()) : parseInt((user as any).id.toString());
+            allUsers.set(numericId, user);
           }
         }
 
@@ -187,28 +192,32 @@ export class AppService {
             userId = (msg.fromId as any)._;
           }
           
-          // Приводим к числу если это строка
-          if (typeof userId === 'string') {
-            userId = parseInt(userId);
-          }
+          // Приводим к числу для консистентности
+          const numericUserId = typeof userId === 'object' ? parseInt(userId.toString()) : parseInt(userId.toString());
           
-          this.logger.debug(`👤 Processing message from user ID: ${userId} (original fromId: ${JSON.stringify(msg.fromId)})`);
+          this.logger.debug(`👤 Processing message from user ID: ${numericUserId} (original fromId: ${JSON.stringify(msg.fromId)})`);
             
-          const user = allUsers.get(userId);
+          const user = allUsers.get(numericUserId);
           
           // Проверяем, есть ли переписка с этим пользователем
-          hasPrivateChat = privateDialogs.has(userId);
+          hasPrivateChat = privateDialogs.has(numericUserId);
           
           // Дополнительная проверка по username если не найдено по ID
           if (!hasPrivateChat && user && user.username) {
             const usernameNormalized = user.username.toLowerCase();
             hasPrivateChat = privateDialogsByUsername.has(usernameNormalized);
             if (hasPrivateChat) {
-              this.logger.debug(`💬 Found private chat for user ${userId} by username: ${user.username}`);
+              this.logger.debug(`💬 Found private chat for user ${numericUserId} by username: ${user.username}`);
             }
           }
           
-          this.logger.debug(`💬 User ${userId} (${user?.username || 'no username'}) has private chat: ${hasPrivateChat}`);
+          this.logger.log(`💬 USER ANALYSIS: ID=${numericUserId} (type: ${typeof numericUserId}), username=${user?.username || 'none'}, firstName=${user?.firstName || 'none'}, hasPrivateChat=${hasPrivateChat}`);
+          this.logger.log(`💬 PRIVATE DIALOGS CHECK: privateDialogs.has(${numericUserId}) = ${privateDialogs.has(numericUserId)} (privateDialogs contains: ${Array.from(privateDialogs).slice(0, 5).map(id => `${id}(${typeof id})`).join(', ')}...)`);
+          
+          if (user?.username) {
+            const usernameCheck = privateDialogsByUsername.has(user.username.toLowerCase());
+            this.logger.log(`💬 USERNAME CHECK: privateDialogsByUsername.has('${user.username.toLowerCase()}') = ${usernameCheck}`);
+          }
           
           if (user) {
             // Используем данные пользователя из кэша
@@ -218,7 +227,7 @@ export class AppService {
           } else {
             // Фоллбэк: пытаемся получить пользователя через API
             try {
-              const userEntity = await client.getEntity(userId);
+              const userEntity = await client.getEntity(numericUserId);
               const userName = this.getUserDisplayName(userEntity);
               const username = this.getUserUsername(userEntity);
               
