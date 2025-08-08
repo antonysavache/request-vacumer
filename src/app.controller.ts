@@ -1,4 +1,4 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Post, Query, Body } from '@nestjs/common';
 import { AppService } from './app.service';
 
 @Controller()
@@ -21,5 +21,16 @@ export class AppController {
       toDate,
       hoursBack: hoursBack ? parseInt(hoursBack) : undefined,
     });
+  }
+
+  @Post('send-private-message')
+  async sendPrivateMessage(
+    @Body() body: { 
+      userId: string; 
+      message: string;
+      parseMode?: 'markdown' | 'html';
+    }
+  ) {
+    return this.appService.sendPrivateMessage(body.userId, body.message, body.parseMode);
   }
 }

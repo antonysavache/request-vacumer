@@ -257,4 +257,59 @@ export class AppService {
     }
     return null;
   }
+
+  async sendPrivateMessage(userId: string, message: string, parseMode?: 'markdown' | 'html') {
+    try {
+      this.logger.log(`📤 Sending message to user: ${userId}`);
+      
+      const client = this.telegramClient.getClient();
+      
+      if (!this.telegramClient.isReady()) {
+        throw new Error('Telegram client is not ready');
+      }
+
+      if (!userId || !message) {
+        throw new Error('userId and message are required');
+      }
+
+      if (message.trim().length === 0) {
+        throw new Error('Message cannot be empty');
+      }
+
+      // Получаем пользователя
+      let userEntity;
+      try {
+        userEntity = await client.getEntity(userId);
+      } catch (error) {
+        throw new Error(`User not found: ${userId}`);
+      }
+
+      // Отправляем сообщение
+      const sendOptions: any = { message };
+      if (parseMode) {
+        sendOptions.parseMode = parseMode;
+      }
+
+      const sentMessage = await client.sendMessage(userEntity, sendOptions);
+      
+      this.logger.log(`✅ Message sent to ${userId}`);
+
+      return {
+        success: true,
+        data: {
+          message_id: sentMessage.id,
+          to_user_id: userEntity.id,
+          message,
+          sent_at: new Date().toISOString()
+        }
+      };
+
+    } catch (error) {
+      this.logger.error(`Error sending message: ${error.message}`);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
 }
