@@ -16,13 +16,15 @@ export class AppService {
     fromDate?: string;
     toDate?: string;
     hoursBack?: number;
+    chatId?: string;
   }) {
     try {
       const client = this.telegramClient.getClient();
       
-      const targetChatId = process.env.TARGET_CHATS;
+      // Используем переданный chatId или дефолтный из env
+      const targetChatId = params.chatId || process.env.TARGET_CHATS;
       if (!targetChatId) {
-        throw new Error('TARGET_CHATS environment variable is not set');
+        throw new Error('chatId parameter or TARGET_CHATS environment variable is required');
       }
 
       this.logger.log(`🔍 Attempting to get chat history for: ${targetChatId}`);
@@ -275,6 +277,180 @@ export class AppService {
 
     } catch (error) {
       this.logger.error('Error fetching chat history:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  async getAvailableChats() {
+    try {
+      this.logger.log(`🔍 Getting available chats...`);
+      
+      const client = this.telegramClient.getClient();
+      
+      if (!this.telegramClient.isReady()) {
+        throw new Error('Telegram client is not ready');
+      }
+
+      const dialogs = await client.getDialogs({ limit: 100 });
+      const availableChats: any[] = [];
+      
+      for (const dialog of dialogs) {
+        const entity = dialog.entity as any;
+        
+        // Включаем группы, супергруппы и каналы
+        if (entity.className === 'Chat' || entity.className === 'Channel') {
+          const chatInfo = {
+            id: entity.id.toString(),
+            title: entity.title || 'Без названия',
+            type: entity.className === 'Channel' ? 
+              (entity.broadcast ? 'channel' : 'supergroup') : 'group',
+            participants_count: entity.participantsCount || 0,
+            username: entity.username || null,
+            description: entity.about || null,
+            last_message_date: dialog.date ? new Date(dialog.date * 1000).toISOString() : null,
+            unread_count: dialog.unreadCount || 0
+          };
+          
+          availableChats.push(chatInfo);
+        }
+      }
+
+      // Сортируем по дате последнего сообщения
+      availableChats.sort((a, b) => {
+        if (!a.last_message_date) return 1;
+        if (!b.last_message_date) return -1;
+        return new Date(b.last_message_date).getTime() - new Date(a.last_message_date).getTime();
+      });
+
+      this.logger.log(`✅ Found ${availableChats.length} available chats`);
+
+      return {
+        success: true,
+        data: {
+          chats: availableChats,
+          total_count: availableChats.length
+        }
+      };
+
+    } catch (error) {
+      this.logger.error(`Error getting available chats: ${error.message}`);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  async getChatInfo(chatId: string) {
+    try {
+      this.logger.log(`🔍 Getting info for chat: ${chatId}`);
+      
+      const client = this.telegramClient.getClient();
+      
+      if (!this.telegramClient.isReady()) {
+        throw new Error('Telegram client is not ready');
+      }
+
+      const entity = await client.getEntity(chatId);
+      
+      const chatInfo = {
+        id: chatId,
+        title: (entity as any).title || 'Без названия',
+        type: (entity as any).className === 'Channel' ? 
+          ((entity as any).broadcast ? 'channel' : 'supergroup') : 'group',
+        participants_count: (entity as any).participantsCount || 0,
+        username: (entity as any).username || null,
+        description: (entity as any).about || null,
+        is_creator: (entity as any).creator || false,
+        is_admin: (entity as any).adminRights ? true : false,
+        can_send_messages: (entity as any).defaultBannedRights ? 
+          !(entity as any).defaultBannedRights.sendMessages : true
+      };
+
+      this.logger.log(`✅ Got chat info: ${chatInfo.title}`);
+
+      return {
+        success: true,
+        data: chatInfo
+      };
+
+    } catch (error) {
+      this.logger.error(`Error getting chat info: ${error.message}`);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  async getChatStats(chatId: string) {
+    try {
+      this.logger.log(`📊 Getting stats for chat: ${chatId}`);
+      
+      const client = this.telegramClient.getClient();
+      
+      if (!this.telegramClient.isReady()) {
+        throw new Error('Telegram client is not ready');
+      }
+
+      const entity = await client.getEntity(chatId);
+      
+      // Получаем последние 100 сообщений для статистики
+      const result = await client.invoke(
+        new Api.messages.GetHistory({
+          peer: entity,
+          limit: 100,
+          offsetId: 0
+        })
+      );
+
+      let messageCount = 0;
+      let lastMessageDate: string | null = null;
+      let activeUsers = new Set<string>();
+
+      if ('messages' in result && result.messages.length > 0) {
+        messageCount = result.messages.length;
+        
+        // Получаем дату последнего сообщения
+        const lastMsg = result.messages[0] as any;
+        if (lastMsg.date) {
+          lastMessageDate = new Date(lastMsg.date * 1000).toISOString();
+        }
+
+        // Считаем уникальных пользователей
+        for (const msg of result.messages) {
+          if ((msg as any).fromId) {
+            let userId = (msg as any).fromId;
+            if (typeof userId === 'object' && 'userId' in userId) {
+              userId = userId.userId;
+            }
+            activeUsers.add(userId.toString());
+          }
+        }
+      }
+
+      const stats = {
+        chat_id: chatId,
+        title: (entity as any).title || 'Без названия',
+        recent_messages_count: messageCount,
+        active_users_count: activeUsers.size,
+        last_message_date: lastMessageDate,
+        participants_count: (entity as any).participantsCount || 0,
+        generated_at: new Date().toISOString()
+      };
+
+      this.logger.log(`✅ Generated stats for chat: ${stats.title}`);
+
+      return {
+        success: true,
+        data: stats
+      };
+
+    } catch (error) {
+      this.logger.error(`Error getting chat stats: ${error.message}`);
       return {
         success: false,
         error: error.message

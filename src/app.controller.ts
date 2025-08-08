@@ -15,12 +15,41 @@ export class AppController {
     @Query('from_date') fromDate?: string,
     @Query('to_date') toDate?: string,
     @Query('hours_back') hoursBack?: string,
+    @Query('chat_id') chatId?: string,
   ) {
     return this.appService.getChatHistory({
       fromDate,
       toDate,
       hoursBack: hoursBack ? parseInt(hoursBack) : undefined,
+      chatId,
     });
+  }
+
+  @Get('available-chats')
+  async getAvailableChats() {
+    return this.appService.getAvailableChats();
+  }
+
+  @Get('chat-info')
+  async getChatInfo(@Query('chat_id') chatId: string) {
+    if (!chatId) {
+      return {
+        success: false,
+        error: 'chat_id parameter is required'
+      };
+    }
+    return this.appService.getChatInfo(chatId);
+  }
+
+  @Get('chat-stats')
+  async getChatStats(@Query('chat_id') chatId: string) {
+    if (!chatId) {
+      return {
+        success: false,
+        error: 'chat_id parameter is required'
+      };
+    }
+    return this.appService.getChatStats(chatId);
   }
 
   @Post('send-private-message')
