@@ -114,13 +114,17 @@ export class AppService {
       this.logger.log(`🔍 Getting dialogs to check private conversations...`);
       const dialogs = await client.getDialogs({ limit: 100 }); // Увеличиваем лимит для более полной проверки
       const privateDialogs = new Set();
+      const privateDialogsByUsername = new Map(); // username -> userId
       
       for (const dialog of dialogs) {
         const entity = dialog.entity as any;
         // Проверяем, что это приватный чат (не группа/канал)
         if (entity.className === 'User' && entity.id) {
           privateDialogs.add(entity.id);
-          this.logger.debug(`📱 Added private dialog with user ID: ${entity.id} (${entity.firstName || 'No name'} ${entity.lastName || ''})`);
+          if (entity.username) {
+            privateDialogsByUsername.set(entity.username.toLowerCase(), entity.id);
+          }
+          this.logger.debug(`📱 Added private dialog with user ID: ${entity.id}, username: ${entity.username || 'No username'} (${entity.firstName || 'No name'} ${entity.lastName || ''})`);
         }
       }
       
@@ -195,7 +199,16 @@ export class AppService {
           // Проверяем, есть ли переписка с этим пользователем
           hasPrivateChat = privateDialogs.has(userId);
           
-          this.logger.debug(`💬 User ${userId} has private chat: ${hasPrivateChat}`);
+          // Дополнительная проверка по username если не найдено по ID
+          if (!hasPrivateChat && user && user.username) {
+            const usernameNormalized = user.username.toLowerCase();
+            hasPrivateChat = privateDialogsByUsername.has(usernameNormalized);
+            if (hasPrivateChat) {
+              this.logger.debug(`💬 Found private chat for user ${userId} by username: ${user.username}`);
+            }
+          }
+          
+          this.logger.debug(`💬 User ${userId} (${user?.username || 'no username'}) has private chat: ${hasPrivateChat}`);
           
           if (user) {
             // Используем данные пользователя из кэша
